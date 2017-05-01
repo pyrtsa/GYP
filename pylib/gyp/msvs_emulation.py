@@ -8,10 +8,12 @@ build systems, primarily ninja.
 """
 
 import os
+import pickle
 import re
 import subprocess
 import sys
 import time
+import hashlib
 
 from gyp.common import OrderedSet
 import gyp.MSVSUtil
@@ -975,14 +977,13 @@ def _ExtractImportantEnvironment(output_of_set, arch):
       'tmp',
       )
   env = {}
-  cl_path = ''
   # This occasionally happens and leads to misleading SYSTEMROOT error messages
   # if not caught here.
   if output_of_set.count('=') == 0:
     raise Exception('Invalid output_of_set. Value is:\n%s' % output_of_set)
   for line in output_of_set.splitlines():
     if re.search('{0}.cl.exe'.format(arch), line, re.I):
-      cl_path = line
+      env['CL_PATH'] = line
       continue
     for envvar in envvars_to_save:
       if re.match(envvar + '=', line, re.I):
@@ -1000,7 +1001,7 @@ def _ExtractImportantEnvironment(output_of_set, arch):
     if required not in env:
       raise Exception('Environment variable "%s" '
                       'required to be set to valid path' % required)
-  return env, cl_path
+  return env
 
 def _FormatAsEnvironmentBlock(envvar_dict):
   """Format as an 'environment block' directly suitable for CreateProcess.
@@ -1038,23 +1039,7 @@ def GenerateEnvironmentFiles(toplevel_build_dir, generator_flags,
   vs = GetVSVersion(generator_flags)
   cl_paths = {}
   for arch in archs:
-    if arch not in vcvars_cache:
-      # Extract environment variables for subprocesses.
-      args = vs.SetupScript(arch)
-      args.extend(('&&', 'set', '&&', 'where', 'cl.exe'))
-      start_time = time.clock()
-      popen = subprocess.Popen(
-        args, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-      std_out, _ = popen.communicate()
-      if popen.returncode != 0:
-        raise Exception('"%s" failed with error %d' % (args, popen.returncode))
-      end_time = time.clock()
-      if DEBUG_GENERAL in gyp.debug.keys():
-        DebugOutput(DEBUG_GENERAL, "vcvars %s time: %f" %
-                    (' '.join(args), end_time - start_time))
-        vcvars_cache[arch] = _ExtractImportantEnvironment(std_out, arch)
-
-    env, cl_path = vcvars_cache[arch]
+    env = _GetEnvironment(arch, vs, open_out)
 
     # Inject system includes from gyp files into INCLUDE.
     if system_includes:
@@ -1067,8 +1052,49 @@ def GenerateEnvironmentFiles(toplevel_build_dir, generator_flags,
     f.write(env_block)
     f.close()
 
-    cl_paths[arch] = cl_path
+    cl_paths[arch] = env['CL_PATH']
   return cl_paths
+
+
+def _GetEnvironment(arch, vs, open_out):
+  appdata_dir = os.environ.get('APPDATA', '')
+  cache_path = os.path.join(appdata_dir, '.gyp-cache')
+  env = {}
+  args = vs.SetupScript(arch)
+  args.extend(('&&', 'set', '&&', 'where', 'cl.exe'))
+  cache_key = os.path.join(cache_path, hashlib.md5(''.join(args)).hexdigest())
+  if os.path.exists(cache_key):
+    try:
+      with file(cache_key) as f:
+        env = pickle.load(f)
+    except Exception:
+      pass
+    cl_path = env.get('CL_PATH', '')
+    if os.path.exists(cl_path):
+      return env
+    else:
+      # cache has become invalid (tool set update)
+      os.remove(cache_key)
+  start_time = time.clock()
+  # Extract environment variables for subprocesses.
+  popen = subprocess.Popen(
+    args, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  std_out, _ = popen.communicate()
+  if popen.returncode != 0:
+    raise Exception('"%s" failed with error %d' % (args, popen.returncode))
+  end_time = time.clock()
+  if DEBUG_GENERAL in gyp.debug.keys():
+    DebugOutput(DEBUG_GENERAL, "vcvars %s time: %f" %
+                (' '.join(args), end_time - start_time))
+  env = _ExtractImportantEnvironment(std_out, arch)
+  if os.path.exists(appdata_dir):
+    try:
+      with open_out(cache_key) as f:
+        pickle.dump(env, f)
+    except Exception, e:
+      print e
+  return env
+
 
 def VerifyMissingSources(sources, build_dir, generator_flags, gyp_to_ninja):
   """Emulate behavior of msvs_error_on_missing_sources present in the msvs
