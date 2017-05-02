@@ -979,10 +979,13 @@ def _ExtractImportantEnvironment(output_of_set, arch):
   env = {}
   # This occasionally happens and leads to misleading SYSTEMROOT error messages
   # if not caught here.
+  cl_find = 'cl.exe'
+  if 'Visual Studio 2017' in output_of_set:
+    cl_find = arch + '.' + cl_find
   if output_of_set.count('=') == 0:
     raise Exception('Invalid output_of_set. Value is:\n%s' % output_of_set)
   for line in output_of_set.splitlines():
-    if re.search('{0}.cl.exe'.format(arch), line, re.I):
+    if re.search(cl_find, line, re.I):
       env['CL_PATH'] = line
       continue
     for envvar in envvars_to_save:
