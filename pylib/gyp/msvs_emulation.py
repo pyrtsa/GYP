@@ -986,7 +986,7 @@ def _ExtractImportantEnvironment(output_of_set, arch):
     raise Exception('Invalid output_of_set. Value is:\n%s' % output_of_set)
   for line in output_of_set.splitlines():
     if re.search(cl_find, line, re.I):
-      env['CL_PATH'] = line
+      env['GYP_CL_PATH'] = line
       continue
     for envvar in envvars_to_save:
       if re.match(envvar + '=', line, re.I):
@@ -1055,29 +1055,49 @@ def GenerateEnvironmentFiles(toplevel_build_dir, generator_flags,
     f.write(env_block)
     f.close()
 
-    cl_paths[arch] = env['CL_PATH']
+    cl_paths[arch] = env['GYP_CL_PATH']
   return cl_paths
 
 
 def _GetEnvironment(arch, vs, open_out):
-  appdata_dir = os.environ.get('APPDATA', '')
-  cache_path = os.path.join(appdata_dir, '.gyp-cache')
+  """
+  This function will run the VC environment setup script, retrieve variables,
+  and also the path on cl.exe.
+  It will then try to cache the values to disk, and on next run will try to
+  lookup the cache. The cache key is the path to the setup script (which is
+  embedded within each Visual Studio installed instance) + it's args.
+  Even after a cache hit we do some validation of the cached values,
+  since parts of the tool-set can be upgraded with in the installed lifecycle
+  so paths and version numbers may change.
+
+  Args:
+    arch: {string} target architecture
+    vs: VisualStudioVersion
+    open_out: file open wrapper
+
+  Returns: {dict} the important environment variables VC need to run
+
+  """
   env = {}
   args = vs.SetupScript(arch)
   args.extend(('&&', 'set', '&&', 'where', 'cl.exe'))
-  cache_key = os.path.join(cache_path, hashlib.md5(''.join(args)).hexdigest())
-  if os.path.exists(cache_key):
+  cache_key = hashlib.md5(''.join(args)).hexdigest()
+  # The default value for %TEMP% will make all cache look ups to safely miss
+  appdata_dir = os.environ.get('TEMP', '')
+  cache_path = os.path.join(appdata_dir, '.gyp-cache')
+  cache_keyed_file = os.path.join(cache_path, cache_key)
+  if os.path.exists(cache_keyed_file):
     try:
-      with file(cache_key) as f:
+      with file(cache_keyed_file) as f:
         env = pickle.load(f)
     except Exception:
       pass
-    cl_path = env.get('CL_PATH', '')
+    cl_path = env.get('GYP_CL_PATH', '')
     if os.path.exists(cl_path):
       return env
     else:
-      # cache has become invalid (tool set update)
-      os.remove(cache_key)
+      # cache has become invalid (probably form a tool set update)
+      os.remove(cache_keyed_file)
   start_time = time.clock()
   # Extract environment variables for subprocesses.
   popen = subprocess.Popen(
@@ -1092,7 +1112,7 @@ def _GetEnvironment(arch, vs, open_out):
   env = _ExtractImportantEnvironment(std_out, arch)
   if os.path.exists(appdata_dir):
     try:
-      with open_out(cache_key) as f:
+      with open_out(cache_keyed_file) as f:
         pickle.dump(env, f)
     except Exception, e:
       print e
