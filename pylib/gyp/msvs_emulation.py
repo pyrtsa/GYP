@@ -1081,11 +1081,10 @@ def _GetEnvironment(arch, vs, open_out):
   env = {}
   args = vs.SetupScript(arch)
   args.extend(('&&', 'set', '&&', 'where', 'cl.exe'))
-  cache_key = hashlib.md5(''.join(args)).hexdigest()
+  cache_key = 'gyp-env-cache-' + hashlib.md5(''.join(args)).hexdigest()
   # The default value for %TEMP% will make all cache look ups to safely miss
-  appdata_dir = os.environ.get('TEMP', '')
-  cache_path = os.path.join(appdata_dir, '.gyp-cache')
-  cache_keyed_file = os.path.join(cache_path, cache_key)
+  cache_dir = os.environ.get('GYP_TEMP', os.getcwd())
+  cache_keyed_file = os.path.join(cache_dir, cache_key)
   if os.path.exists(cache_keyed_file):
     try:
       with file(cache_keyed_file) as f:
@@ -1110,12 +1109,11 @@ def _GetEnvironment(arch, vs, open_out):
     DebugOutput(DEBUG_GENERAL, "vcvars %s time: %f" %
                 (' '.join(args), end_time - start_time))
   env = _ExtractImportantEnvironment(std_out, arch)
-  if os.path.exists(appdata_dir):
-    try:
-      with open_out(cache_keyed_file) as f:
-        pickle.dump(env, f)
-    except Exception, e:
-      print e
+  try:
+    with open_out(cache_keyed_file) as f:
+      pickle.dump(env, f)
+  except Exception, e:
+    print(e)
   return env
 
 
